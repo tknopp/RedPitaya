@@ -59,10 +59,10 @@ end
 initial begin
   repeat(100) @(posedge clk);
   //test_id  (32'h40000000);
-  test_asg (32'h40080000, 32'h40090000, 0*6);
-  test_asg (32'h400a0000, 32'h400b0000, 1*6);
+  test_gen (32'h40040000, 32'h40050000, 0*6);
+  test_gen (32'h40060000, 32'h40070000, 1*6);
   repeat(16) @(posedge clk);
-  test_acq (32'h40040000, 32'h40050000, 2*6);
+  test_osc (32'h40080000, 32'h40090000, 2*6);
   repeat(16) @(posedge clk);
   //test_clb (32'h40030000);
   //test_la (32'h40300000);
@@ -139,17 +139,19 @@ int buf_len = 'hff+1;
 real freq  = 10_000; // 10kHz
 real phase = 0; // DEG
 
-task test_acq (
+task test_osc (
   int unsigned regset,
   int unsigned buffer,
   int unsigned sh = 0
 );
   repeat(10) @(posedge clk);
-  // start/stop/trigger masks
-  axi_write(regset+'h10, 'b000001<<sh);  // reset
-  axi_write(regset+'h14, 'b000010<<sh);  // start
-  axi_write(regset+'h18, 'b000100<<sh);  // stop
-  axi_write(regset+'h1c, 'b011000<<sh);  // trigger
+  // hardware event (trigger) mask
+  axi_write(regset+'h04, '1);
+  // software event (reset/start/stop/trigger) masks
+  axi_write(regset+'h10, '1);  // reset
+  axi_write(regset+'h14, '1);  // start
+  axi_write(regset+'h18, '1);  // stop
+  axi_write(regset+'h1c, '1);  // trigger
   // bypass input filter
   axi_write(regset+'h4c, 'h1);
 
@@ -164,14 +166,15 @@ task test_acq (
   axi_write(regset+'h24, 'd24);  // cfg_pst
 
   // start/trigger acquire
+  axi_write(regset+'h00, 4'b0001);  // reset
   axi_write(regset+'h00, 4'b0010);  // start
   //axi_write(regset+'h00, 4'b0100);  // stop
   //axi_write(regset+'h00, 4'b1000);  // trigger
   repeat(1000) @(posedge clk);
-endtask: test_acq
+endtask: test_osc
 
 
-task test_asg (
+task test_gen (
   int unsigned regset,
   int unsigned buffer,
   int unsigned sh = 0
@@ -207,11 +210,13 @@ task test_asg (
 //  axi_write(regset+'h28, (buf_len * (freq*TP/10**6)) * 2**CWF - 1);  // step
   // configure burst mode
   axi_write(regset+'h30, 2'b00);  // burst disable
-  // start/stop/trigger masks
-  axi_write(regset+'h10, 'b000001<<sh);  // reset
-  axi_write(regset+'h14, 'b000010<<sh);  // start
-  axi_write(regset+'h18, 'b000100<<sh);  // stop
-  axi_write(regset+'h1c, 'b001000<<sh);  // trigger
+  // hardware event (trigger) mask
+  axi_write(regset+'h04, '1);
+  // software event (reset/start/stop/trigger) masks
+  axi_write(regset+'h10, '1);  // reset
+  axi_write(regset+'h14, '1);  // start
+  axi_write(regset+'h18, '1);  // stop
+  axi_write(regset+'h1c, '1);  // trigger
   // start, trigger
   axi_write(regset+'h00, 4'b0010);
   axi_write(regset+'h00, 4'b1000);
@@ -231,7 +236,7 @@ task test_asg (
 //  // stop (reset)
 ////axi_write(regset+'h00, 2'b01);
 ////repeat(20) @(posedge clk);
-endtask: test_asg
+endtask: test_gen
 
 
 // calibration regset test
@@ -392,7 +397,7 @@ wire           DDR_we_n   ;
 logic [2-1:0] [16-1:0] adc_dat;
 logic         [ 2-1:0] adc_clk;
 logic         [ 2-1:0] adc_clk_o;   // optional ADC clock source
-logic                  adc_cdcs;    // ADC clock duty cycle stabilizer
+logic                  adc_cdcs_o;  // ADC clock duty cycle stabilizer
 // DAC
 logic         [14-1:0] dac_dat;     // DAC combined data
 logic                  dac_wrt;     // DAC write
@@ -491,7 +496,6 @@ assign adc_dat[1] = dat_ref[cyc % SIZ_REF];
 assign adc_clk[1] =  clk;
 assign adc_clk[0] = ~clk;
 // adc_clk_o
-// adc_cdcs
 
 // XADC
 assign vinp = '0;

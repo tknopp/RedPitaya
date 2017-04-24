@@ -23,40 +23,29 @@ module gen_tb #(
 );
 
 ////////////////////////////////////////////////////////////////////////////////
-// DAC signal generation
+// signal generation
 ////////////////////////////////////////////////////////////////////////////////
 
-// syste signals
-logic                  clk ;
-logic                  rstn;
+// system signals
+logic clk ;
+logic rstn;
 
-// interrupts
-logic           irq_trg;  // trigger
-logic           irq_stp;  // stop
+// interrupt
+logic irq;
 
 // stream
 axi4_stream_if #(.DN (1), .DT (DT)) str (.ACLK (clk), .ARESETn (rstn));
 
-// events
-typedef struct packed {
-  logic lst;  // last
-  logic per;  // period
-  logic trg;  // software trigger
-  logic stp;  // software stop
-  logic str;  // software start
-  logic rst;  // software reset
-} evn_asg_t;
+// events input/output
+evn_pkg::evd_t evd;  // input
+evn_pkg::evs_t evs;  // output
 
-evn_asg_t evn;
-
-// event parameters
-localparam int unsigned EW = $bits(evn_asg_t);  // event array width
+assign evd = evn_pkg::evn_f(evs, 1'b0);
 
 ////////////////////////////////////////////////////////////////////////////////
 // clock
 ////////////////////////////////////////////////////////////////////////////////
 
-// DAC clock
 initial        clk = 1'b0;
 always #(TP/2) clk = ~clk;
 
@@ -110,22 +99,24 @@ initial begin
     busm_tbl.read((i*4), rdata_blk [i]);  // read table
   end
   // configure amplitude and DC offset
-  busm.write('h38, 1 << ($bits(DTM)-2));  // amplitude
-  busm.write('h3c, 0);                    // DC offset
+  busm.write('h50, 1 << ($bits(DTM)-2));  // amplitude
+  busm.write('h54, 0);                    // DC offset
+  busm.write('h58, 1);                    // enable output
 
-  // all events are SW driven
-  busm.write('h10, 5'b000001);  // reset
-  busm.write('h14, 5'b000010);  // start
-  busm.write('h18, 5'b000100);  // stop
-  busm.write('h1c, 5'b001000);  // trigger
+  // event masks
+  busm.write('h04, 1'b0);  // hardware trigger
+  busm.write('h10, 1'b1);  // software reset
+  busm.write('h14, 1'b1);  // software start
+  busm.write('h18, 1'b1);  // software stop
+  busm.write('h1c, 1'b1);  // software trigger
 
   // configure frequency and phase
-  busm.write('h10,  buf_len                    * 2**CWF - 1);  // table size
-  busm.write('h14, (buf_len * (phase/360.0)  ) * 2**CWF    );  // offset
-//busm.write('h18, (buf_len * (freq*TP/10**6)) * 2**CWF - 1);  // step
-  busm.write('h18, 1                           * 2**CWF - 1);  // step
+  busm.write('h20,  buf_len                    * 2**CWF - 1);  // table size
+  busm.write('h24, (buf_len * (phase/360.0)  ) * 2**CWF    );  // offset
+//busm.write('h28, (buf_len * (freq*TP/10**6)) * 2**CWF - 1);  // step
+  busm.write('h28, 1                           * 2**CWF - 1);  // step
   // configure burst mode
-  busm.write('h20, 2'b00);  // burst disable
+  busm.write('h30, 2'b00);  // burst disable
   // start/trigger
   busm.write('h00, CTL_STR);
   busm.write('h00, CTL_TRG);
@@ -138,13 +129,13 @@ initial begin
   ##20;
 
   // configure frequency and phase
-  busm.write('h14, 0 * 2**CWF    );  // offset
-  busm.write('h18, 1 * 2**CWF - 1);  // step
+  busm.write('h24, 0 * 2**CWF    );  // offset
+  busm.write('h28, 1 * 2**CWF - 1);  // step
   // configure burst mode
-  busm.write('h20, 2'b01);  // burst enable
-  busm.write('h24, 4-1);  // burst data length
-  busm.write('h28, 8-1);  // burst      length
-  busm.write('h2c, 4-1);  // burst number of repetitions
+  busm.write('h30, 2'b01);  // burst enable
+  busm.write('h34, 4-1);  // burst data   length
+  busm.write('h38, 8-1);  // burst period length
+  busm.write('h3c, 4-1);  // burst number of repetitions
   // start/trigger
   busm.write('h00, CTL_STR);
   busm.write('h00, CTL_TRG);
@@ -174,19 +165,17 @@ gen #(
   .DT  (DT),
   .DTM (DTM),
   .DTS (DTS),
-  .EW  (EW)
+  .DTC (logic),
+  .DTT (evn_pkg::evt_t),
+  .DTE (evn_pkg::evd_t)
 ) gen (
   // stream output
   .sto      (str),
-  // external events
-  .evn_ext  (evn),
-  // event sources
-  .evn_rst  (evn.rst),
-  .evn_str  (evn.str),
-  .evn_stp  (evn.stp),
-  .evn_trg  (evn.trg),
-  .evn_per  (evn.per),
-  .evn_lst  (evn.lst),
+  // events input/output
+  .evi      (evd),
+  .evo      (evs),
+  // interrupt
+  .irq      (irq),
   // system bus
   .bus      (bus),
   .bus_tbl  (bus_tbl)

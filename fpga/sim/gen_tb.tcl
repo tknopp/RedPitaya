@@ -14,6 +14,9 @@ quietly WaveActivateNextPane {} 0
 add wave -noupdate /${top}/clk
 add wave -noupdate /${top}/rstn
 
+# events
+add wave -noupdate           /${top}/${dut}/evi
+add wave -noupdate           /${top}/${dut}/evo
 # control/status
 add wave -noupdate           /${top}/${dut}/ctl_rst
 add wave -noupdate           /${top}/${dut}/ctl_str
@@ -22,8 +25,8 @@ add wave -noupdate           /${top}/${dut}/ctl_stp
 add wave -noupdate           /${top}/${dut}/sts_stp
 add wave -noupdate           /${top}/${dut}/ctl_trg
 add wave -noupdate           /${top}/${dut}/sts_trg
-# event control/configuration
-add wave -noupdate -bin      /${top}/${dut}/evn_ext
+# event masks
+add wave -noupdate -bin      /${top}/${dut}/cfg_rst
 add wave -noupdate -bin      /${top}/${dut}/cfg_str
 add wave -noupdate -bin      /${top}/${dut}/cfg_stp
 add wave -noupdate -bin      /${top}/${dut}/cfg_trg
@@ -46,7 +49,7 @@ add wave -noupdate -unsigned /${top}/${dut}/cfg_sum
 
 # counter end status
 add wave -noupdate           /${top}/${dut}/asg/end_bdl
-add wave -noupdate           /${top}/${dut}/asg/end_bln
+add wave -noupdate           /${top}/${dut}/asg/end_bpl
 add wave -noupdate           /${top}/${dut}/asg/end_bnm
 # status
 add wave -noupdate           /${top}/${dut}/asg/sts_adr
