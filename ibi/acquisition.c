@@ -34,23 +34,34 @@ int16_t *buffControl;
 float *sinBuff = NULL;
 float *cosBuff = NULL;
 int data_read;
+int data_read_total;
 int buff_size;
-float intToVolt = 0.5/200222.109375;
-float amplitudeTx = 0.1;
+float intToVolt = 0.5/200222.109375; // needs config value
+float amplitudeTx = 0.1;             // needs config value
 int numSamplesPerPeriod;
 int numPeriods;
+float Kp = 0.2;
+float Ki = 0.8;
+float eps_amplitude = 0.001;
+
+bool controlPhase;
 
 // The control thread
 void *control_thread (void *ch)
 {
   int currentFrame = -1;
+  int counter = 0;
+
+  float esum = amplitudeTx / Ki; 
+
   while(currentFrame < numPeriods-1 ) {
     // Calculate frames
+    int oldFrame = currentFrame;
     currentFrame = data_read / numSamplesPerPeriod -1;
             
-    printf("currentFrame: %d \n", currentFrame);
-    sleep(0.02);
-    if(currentFrame >= 0) {
+    if(currentFrame >= 0 && currentFrame != oldFrame) {
+      printf("currentFrame: %d \n", currentFrame);
+      
       // Calculate Fourier coeffcients
       float a = 0;
       float b = 0;
@@ -72,19 +83,36 @@ void *control_thread (void *ch)
 
       float amplitudeV = amplitude*intToVolt;
               
-      printf("amplitude in V: %f \n", amplitudeV);
 
       // The following needs to be replaced by a proper PI controller
       float targetAmplitude = 0.5;
-      if ( amplitudeV < targetAmplitude )
+      float e = -amplitudeV + targetAmplitude;
+      
+      printf("amplitude in V: %f, error: %f \n", amplitudeV, e);
+
+      if ( fabs(e) / targetAmplitude > eps_amplitude )
       {
            printf("amplitudeTx Old in V: %f \n", amplitudeTx);
-           amplitudeTx = amplitudeTx * targetAmplitude / amplitudeV;
+           
+           amplitudeTx = Kp * e + Ki * esum; 
+           esum += e;
+           
+           //amplitudeTx * targetAmplitude / amplitudeV;
+           
+
            printf("amplitudeTx New in V: %f \n", amplitudeTx);
            rp_GenAmp(RP_CH_1, amplitudeTx);
-           usleep(10000);
+           usleep(1000);
+      } else {
+        if(controlPhase) {
+          controlPhase = false;
+          currentFrame = -1;
+        }
       }
-
+      counter++;
+    } else {
+      // wait for next frame
+//      usleep(100);
     }
   }
 
@@ -99,22 +127,36 @@ void* acquisition_thread(void* ch)
   data_read = 0;
   int counter = 0;
 
+  bool lastControlPhase = true;
+
   while(data_read<buff_size) {
      rp_AcqGetWritePointer(&wp);
           
      uint32_t size = getSizeFromStartEndPos(wp_old, wp)-1;
-     printf("____ %d %d %d data_written: %d\n",size, wp_old, wp, data_read);
      size = (data_read + size <= buff_size) ? size : (buff_size - data_read);
      if (size > 0) {
        // Read measurement data
        rp_AcqGetDataRaw(RP_CH_2,wp_old, &size, buff+data_read );
        // Read control data
        rp_AcqGetDataRaw(RP_CH_1,wp_old, &size, buffControl+data_read );
+       
        data_read += size;
+       data_read_total += size;
+       printf("____ %d %d %d data_written: %d total_frame %d\n",
+                      size, wp_old, wp, data_read, data_read_total/numSamplesPerPeriod);
 
        wp_old = wp;
      } 
+
+     if(controlPhase && data_read == buff_size) {
+       data_read = 0;
+     }
      counter++;
+     if(controlPhase != lastControlPhase) {
+       data_read = 0;
+     }
+
+     lastControlPhase = controlPhase;
    }
   return NULL;
 }
@@ -177,10 +219,24 @@ void wait_for_connections()
 void send_data_to_host()
 {
   //n = write(newsockfd,"I got your message",18);
-  n = write(newsockfd, buff, buff_size * sizeof(int16_t));
-  if (n < 0) error("ERROR writing to socket"); 
-  n = write(newsockfd, buffControl, buff_size * sizeof(int16_t));
-  if (n < 0) error("ERROR writing to socket"); 
+
+  int l=0;
+  int data_send = 0;
+  int packet_size = 10000;
+  while(data_send < buff_size) { 
+    int local_packet_size = (data_send + packet_size > buff_size) ?
+                             (buff_size-data_send) : packet_size; 
+    n = write(newsockfd, buff+l*packet_size, 
+                 local_packet_size * sizeof(int16_t));
+    if (n < 0) error("ERROR writing to socket"); 
+    n = write(newsockfd, buffControl+l*packet_size, 
+                 local_packet_size * sizeof(int16_t));
+    if (n < 0) error("ERROR writing to socket"); 
+    n = read(newsockfd,buffer,255);
+    if (n < 0) error("ERROR reading from socket");
+    l++;
+    data_send += local_packet_size;
+  }
 
   close(newsockfd);
   close(sockfd);
@@ -204,6 +260,8 @@ int main(int argc, char **argv){
         wait_for_connections();
 
         data_read = 0;
+        controlPhase = true;
+        data_read_total = 0;
 
         rp_GenReset();
         rp_GenFreq(RP_CH_1, 125.0e6 / 64.0 / numSamplesPerPeriod );
@@ -278,6 +336,8 @@ int main(int argc, char **argv){
         pthread_join (pAcq, NULL);
 
         printf("The buff_size is %d   Data written %d\n", buff_size, data_read);
+
+        rp_GenOutDisable(RP_CH_1);
         
         send_data_to_host();
 
