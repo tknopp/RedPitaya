@@ -38,11 +38,13 @@ int64_t data_read_total;
 int64_t buff_size;
 float intToVolt = 0.5/200222.109375; // needs config value
 float amplitudeTx = 0.1;             // needs config value
+float phaseTx = 0.0;                 // needs config value
 int numSamplesPerPeriod;
 int numPeriods;
 float Kp = 0.2;
 float Ki = 0.8;
 float eps_amplitude = 0.001;
+float eps_phase = 2.0;
 
 bool controlPhase;
 
@@ -53,6 +55,9 @@ void *control_thread (void *ch)
   int64_t counter = 0;
 
   float esum = amplitudeTx / Ki; 
+  float epsum = 0.0 / Ki; 
+
+  bool firstPhaseControl = false;
 
   while(currentFrame < numPeriods-1 ) {
     // Calculate frames
@@ -60,7 +65,7 @@ void *control_thread (void *ch)
     currentFrame = data_read / numSamplesPerPeriod -1;
             
     if(currentFrame >= 0 && currentFrame != oldFrame) {
-      printf("currentFrame: %lld \n", currentFrame);
+      printf("currentFrame: %lld, controlphase: %d \n", currentFrame, (int) controlPhase);
       
       // Calculate Fourier coeffcients
       float a = 0;
@@ -78,19 +83,25 @@ void *control_thread (void *ch)
       float phase = atan2(a, b) / M_PI * 180;
       printf("amplitude: %f  phase: %f \n", amplitude, phase);
 
-      // unfortunately the GenPhase command does not work how we want it
-      //rp_GenPhase(RP_CH_1, phase);
+
+      if(!firstPhaseControl) {
+        printf("ADJUSTING PHASE \n");
+        // the following need changes in RP api
+        //rp_GenPhase(RP_CH_1, phase);
+        firstPhaseControl = true;
+      }
 
       float amplitudeV = amplitude*intToVolt;
               
-
-      // The following needs to be replaced by a proper PI controller
       float targetAmplitude = 0.5;
       float e = -amplitudeV + targetAmplitude;
       
       printf("amplitude in V: %f, error: %f \n", amplitudeV, e);
+      float targetPhase = 0.0;
+      float ep = phase + targetPhase;
 
-      if ( fabs(e) / targetAmplitude > eps_amplitude )
+      if ( fabs(e) / targetAmplitude > eps_amplitude || 
+           fabs(ep)  > eps_phase)
       {
            printf("amplitudeTx Old in V: %f \n", amplitudeTx);
            
@@ -99,10 +110,14 @@ void *control_thread (void *ch)
            
            //amplitudeTx * targetAmplitude / amplitudeV;
            
+           phaseTx = Kp * ep + Ki * epsum; 
+           epsum += ep;
 
            printf("amplitudeTx New in V: %f \n", amplitudeTx);
+           printf("phaseTx New: %f \n", phaseTx);
+           rp_GenPhase(RP_CH_1, phaseTx);
            rp_GenAmp(RP_CH_1, amplitudeTx);
-           usleep(1000);
+           usleep(10000);
       } else {
         if(controlPhase) {
           controlPhase = false;
@@ -127,37 +142,63 @@ void* acquisition_thread(void* ch)
   data_read = 0;
   int counter = 0;
 
-  bool lastControlPhase = true;
+  bool finalRun = false;
 
-  while(data_read<buff_size) {
+  while(true) {
      rp_AcqGetWritePointer(&wp);
           
      uint32_t size = getSizeFromStartEndPos(wp_old, wp)-1;
-     size = (data_read + size <= buff_size) ? size : (buff_size - data_read);
+     printf("____ %d %d %d \n", size, wp_old, wp);
      if (size > 0) {
-       // Read measurement data
-       rp_AcqGetDataRaw(RP_CH_2,wp_old, &size, buff+data_read );
-       // Read control data
-       rp_AcqGetDataRaw(RP_CH_1,wp_old, &size, buffControl+data_read );
-       
-       data_read += size;
-       data_read_total += size;
-       printf("____ %d %d %d data_written: %lld total_frame %lld\n",
-                      size, wp_old, wp, data_read, data_read_total/numSamplesPerPeriod);
+       if(data_read + size <= buff_size) { 
+         // Read measurement data
+         rp_AcqGetDataRaw(RP_CH_2,wp_old, &size, buff+data_read );
+         // Read control data
+         rp_AcqGetDataRaw(RP_CH_1,wp_old, &size, buffControl+data_read );
+         data_read += size;
+         data_read_total += size;
+       } else {
+         uint32_t size1 = buff_size - data_read; 
+         uint32_t size2 = size - size1; 
+        
+         rp_AcqGetDataRaw(RP_CH_2,wp_old, &size1, buff+data_read );
+         rp_AcqGetDataRaw(RP_CH_1,wp_old, &size1, buffControl+data_read );
+         data_read = 0;
+         data_read_total += size1;
+         
+         if(finalRun) {
+           data_read = buff_size;
+           break;
+         }
+
+         uint32_t wp_old_old = wp_old; 
+         wp_old = (wp_old + size1) % ADC_BUFFER_SIZE;
+         printf("____ %d %d %d %d\n", wp_old_old, wp_old, size1, size2);
+         
+         rp_AcqGetDataRaw(RP_CH_2,wp_old, &size2, buff+data_read );
+         rp_AcqGetDataRaw(RP_CH_1,wp_old, &size2, buffControl+data_read );  
+         data_read += size2;
+         data_read_total += size2;
+
+         if(!controlPhase) {
+           printf("We are going for the final run now !!!\n");
+           finalRun = true;
+         }
+       }
+
+
+       printf("++++ data_written: %lld total_frame %lld\n", 
+                data_read, data_read_total/numSamplesPerPeriod);
 
        wp_old = wp;
      } 
 
-     if(controlPhase && data_read == buff_size) {
-       data_read = 0;
-     }
      counter++;
-     if(controlPhase != lastControlPhase) {
-       data_read = 0;
-     }
 
-     lastControlPhase = controlPhase;
    }
+   printf("ACQ Thread is finished!\n");
+       printf("____  data_written: %lld total_frame %lld\n",
+                       data_read, data_read_total/numSamplesPerPeriod);
   return NULL;
 }
 
@@ -263,6 +304,8 @@ int main(int argc, char **argv){
         data_read_total = 0;
         
         controlPhase = true;
+        
+        amplitudeTx = 0.1; // just temporarily
 
         rp_GenReset();
         rp_GenFreq(RP_CH_1, 125.0e6 / 64.0 / numSamplesPerPeriod );
