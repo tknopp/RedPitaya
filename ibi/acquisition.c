@@ -33,9 +33,9 @@ int16_t *buff;
 int16_t *buffControl;
 float *sinBuff = NULL;
 float *cosBuff = NULL;
-int data_read;
-int data_read_total;
-int buff_size;
+int64_t data_read;
+int64_t data_read_total;
+int64_t buff_size;
 float intToVolt = 0.5/200222.109375; // needs config value
 float amplitudeTx = 0.1;             // needs config value
 int numSamplesPerPeriod;
@@ -49,8 +49,8 @@ bool controlPhase;
 // The control thread
 void *control_thread (void *ch)
 {
-  int currentFrame = -1;
-  int counter = 0;
+  int64_t currentFrame = -1;
+  int64_t counter = 0;
 
   float esum = amplitudeTx / Ki; 
 
@@ -60,7 +60,7 @@ void *control_thread (void *ch)
     currentFrame = data_read / numSamplesPerPeriod -1;
             
     if(currentFrame >= 0 && currentFrame != oldFrame) {
-      printf("currentFrame: %d \n", currentFrame);
+      printf("currentFrame: %lld \n", currentFrame);
       
       // Calculate Fourier coeffcients
       float a = 0;
@@ -142,7 +142,7 @@ void* acquisition_thread(void* ch)
        
        data_read += size;
        data_read_total += size;
-       printf("____ %d %d %d data_written: %d total_frame %d\n",
+       printf("____ %d %d %d data_written: %lld total_frame %lld\n",
                       size, wp_old, wp, data_read, data_read_total/numSamplesPerPeriod);
 
        wp_old = wp;
@@ -260,8 +260,9 @@ int main(int argc, char **argv){
         wait_for_connections();
 
         data_read = 0;
-        controlPhase = true;
         data_read_total = 0;
+        
+        controlPhase = true;
 
         rp_GenReset();
         rp_GenFreq(RP_CH_1, 125.0e6 / 64.0 / numSamplesPerPeriod );
@@ -335,7 +336,7 @@ int main(int argc, char **argv){
         pthread_join (pControl, NULL);
         pthread_join (pAcq, NULL);
 
-        printf("The buff_size is %d   Data written %d\n", buff_size, data_read);
+        printf("The buff_size is %lld   Data written %lld\n", buff_size, data_read);
 
         rp_GenOutDisable(RP_CH_1);
         
