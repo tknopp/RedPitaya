@@ -117,7 +117,7 @@ void *control_thread (void *ch)
            printf("phaseTx New: %f \n", phaseTx);
            rp_GenPhase(RP_CH_1, phaseTx);
            rp_GenAmp(RP_CH_1, amplitudeTx);
-           usleep(10000);
+           usleep(5000);
       } else {
         if(controlPhase) {
           controlPhase = false;
