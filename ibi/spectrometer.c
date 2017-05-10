@@ -27,6 +27,7 @@ static uint32_t getSizeFromStartEndPos(uint32_t start_pos, uint32_t end_pos) {
     return end_pos - start_pos + 1;
 }
 
+
 // The following are all global variables that are used by the
 // data acquisition thread as well as the control thread
 int16_t *buff;
@@ -46,6 +47,8 @@ int numPeriods;
 int tx_buff_size;
 float Kp = 0.2;
 float Ki = 0.8;
+float Kp_phase = 0.05;
+float Ki_phase = 0.95;
 float eps_amplitude = 0.001;
 float eps_phase = 0.3;
 
@@ -55,6 +58,14 @@ bool isMaster;
 bool rxEnabled;
 
 int64_t currentFrameTotal;
+
+void fill_tx_buff()
+{
+  for (int i = 0; i < tx_buff_size; ++i){
+    txBuff[i] = sin(2.0*M_PI / tx_buff_size * i + phaseTx/180.0*M_PI);
+  }
+}
+
 
 // The control thread
 void *control_thread (void *ch)
@@ -86,40 +97,53 @@ void *control_thread (void *ch)
       //printf("control coeff: %f %f\n", a, b);
 
       float amplitude = sqrt(a*a+b*b); 
-      float phase = atan2(a, b) / M_PI * 180;
+      float phase = atan2(a,b) / M_PI * 180;
+      //float phase = atan2(a,b) / M_PI * 180;
+      //float phase = acos(a / amplitude) / M_PI * 180;
 
       float amplitudeV = amplitude*intToVolt;
               
       float targetAmplitude = 0.5;
       float e = -amplitudeV + targetAmplitude;
       
-      float targetPhase = 0.0;
-      float ep = phase + targetPhase;
+      float targetPhase = 0.0;//-M_PI/2.0;
+      float ep = -phase + targetPhase;
 
       if ( fabs(e) / targetAmplitude > eps_amplitude || 
            fabs(ep)  > eps_phase)
       {
-           printf("amplitude in V: %f, phase: %f \n", amplitudeV, phase);
-           printf("amplitudeTx Old in V: %f \n", amplitudeTx);
+           printf("amplitudeRx: %f, phase: %f diff %f diffPhase %f \n", 
+                            amplitudeV, phase, e, ep);
+           printf("amplitudeTx Old: %f \n", amplitudeTx);
+           printf("phaseTx Old: %f \n", phaseTx);
            
            amplitudeTx = Kp * e + Ki * esum; 
            esum += e;
            
            //amplitudeTx * targetAmplitude / amplitudeV;
            
-           phaseTx = Kp * ep + Ki * epsum; 
+           phaseTx = Kp_phase * ep + Ki_phase * epsum; 
            epsum += ep;
 
-           printf("amplitudeTx New in V: %f \n", amplitudeTx);
+           //if(ep > 0) phaseTx +=1;
+           //else phaseTx -=1;
+
+           //phaseTx = phaseTx - 0.1*ep;
+
+           if(phaseTx > 180) phaseTx = 180;
+           if(phaseTx < -180) phaseTx = -180;
+           if(epsum > 180/Ki) epsum = 180/Ki_phase;
+           if(epsum < -180/Ki) epsum = -180/Ki_phase;
+
+
+           printf("amplitudeTx New: %f \n", amplitudeTx);
            printf("phaseTx New: %f \n", phaseTx);
            rp_GenAmp(RP_CH_1, amplitudeTx);
-           rp_GenWaveform(RP_CH_1, RP_WAVEFORM_ARBITRARY);
-           for (int i = 0; i < tx_buff_size; ++i){
-              txBuff[i] = sin(2.0*M_PI / tx_buff_size * i - phaseTx/180.0*M_PI);
-            }
+           //rp_GenWaveform(RP_CH_1, RP_WAVEFORM_ARBITRARY);
+           fill_tx_buff();
            rp_GenArbWaveform(RP_CH_1, txBuff, tx_buff_size);
 
-           usleep(50000);
+           usleep(5000);
       } else {
         if(controlPhase) {
           controlPhase = false;
@@ -135,8 +159,30 @@ void *control_thread (void *ch)
   return NULL;
 }
 
+void wait_for_acq_trigger()
+{
+  rp_DpinSetDirection(RP_DIO1_P, RP_OUT);
+  rp_DpinSetState(RP_DIO1_P, RP_LOW);
+
+  rp_AcqSetTriggerSrc(RP_TRIG_SRC_EXT_PE);
+  rp_DpinSetState(RP_DIO1_P, RP_HIGH);
+
+  rp_acq_trig_state_t state = RP_TRIG_STATE_TRIGGERED;
+
+  while(1){
+    rp_AcqGetTriggerState(&state);
+    if(state == RP_TRIG_STATE_TRIGGERED){
+      //sleep(1);
+      rp_AcqStart();
+      break;
+    }
+  }
+}
+
 void* acquisition_thread(void* ch)
 {        
+  wait_for_acq_trigger();
+
   uint32_t wp,wp_old;
   rp_AcqGetWritePointer(&wp_old);
   //rp_AcqGetWritePointerAtTrig(&wp_old);
@@ -340,9 +386,7 @@ void startTx()
 
   tx_buff_size = 64*numSamplesPerPeriod;  //16384/2;
   txBuff = (float *)malloc(tx_buff_size * sizeof(float));
-  for (int i = 0; i < tx_buff_size; ++i){
-    txBuff[i] = sin(2.0*M_PI / tx_buff_size * i);
-  }
+  fill_tx_buff();
   rp_GenWaveform(RP_CH_1, RP_WAVEFORM_ARBITRARY);
   rp_GenArbWaveform(RP_CH_1, txBuff, tx_buff_size);
   rp_GenFreq(RP_CH_1, 125.0e6 / 64.0 / 256 );
@@ -427,6 +471,7 @@ int main(int argc, char **argv){
     controlPhase = true;
         
     amplitudeTx = 0.1; // just temporarily
+    phaseTx = 0.0;
 
     initBuffers();
     if(txEnabled) {
